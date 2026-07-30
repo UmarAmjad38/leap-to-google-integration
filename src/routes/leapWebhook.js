@@ -1,6 +1,11 @@
 import { Router } from "express";
 import { config } from "../config.js";
-import { getJobWithCustomer, extractGclid } from "../services/leap.js";
+import {
+  getJobWithCustomer,
+  getFinancialSummary,
+  extractGclid,
+  extractSaleAmount,
+} from "../services/leap.js";
 import { log, error } from "../utils/logger.js";
 
 const router = Router();
@@ -20,44 +25,116 @@ router.post("/", async (req, res) => {
     return res.status(401).json({ error: "Unauthorized" });
   }
 
-  // Always reply fast so Leap/ngrok don't timeout
-  res.status(200).json({ received: true });
+  if (!config.leapApiToken) {
+    return res.status(500).json({
+      error: "LEAP_API_TOKEN is not set on this server",
+    });
+  }
 
   const events = Array.isArray(req.body) ? req.body : [req.body];
+  const results = [];
 
   for (const event of events) {
+    const base = {
+      action: event?.action,
+      operation: event?.operation,
+      jobId: event?.id ?? null,
+      stage: event?.stage_moved_to?.name ?? null,
+      webhookEvent: event,
+    };
+
+    if (!isSoldStageChange(event)) {
+      results.push({
+        ...base,
+        skipped: true,
+        reason: `Not a sold stage change (expected "${config.soldStageName}")`,
+      });
+      continue;
+    }
+
+    const jobId = event.id;
+    log("Sold stage detected. Fetching job:", jobId);
+
     try {
-      if (!isSoldStageChange(event)) {
-        log("Skipping event (not sold stage change):", {
-          action: event?.action,
-          operation: event?.operation,
-          stage: event?.stage_moved_to?.name,
-        });
-        continue;
-      }
-
-      const jobId = event.id;
-      log("Sold stage detected. Fetching job:", jobId);
-
       const jobPayload = await getJobWithCustomer(jobId);
       const gclid = extractGclid(jobPayload);
 
-      log("Job fetched:", {
-        jobId,
-        jobName: jobPayload?.data?.name,
-        awardedDate: jobPayload?.data?.awarded_date,
-        gclid,
-      });
+      let financialPayload = null;
+      let saleAmount = null;
+      let financialError = null;
 
-      // Google Ads upload comes in a later step
+      try {
+        financialPayload = await getFinancialSummary(jobId);
+        saleAmount = extractSaleAmount(financialPayload);
+      } catch (finErr) {
+        financialError = {
+          message: finErr.message,
+          status: finErr.status ?? null,
+          body: finErr.body ?? null,
+        };
+      }
+
+      const customer = jobPayload?.data?.customer || null;
+
+      results.push({
+        ...base,
+        skipped: false,
+        ok: true,
+        gclid,
+        saleAmount,
+        job: {
+          id: jobPayload?.data?.id ?? jobId,
+          number: jobPayload?.data?.number ?? null,
+          name: jobPayload?.data?.name ?? null,
+          awarded_date: jobPayload?.data?.awarded_date ?? null,
+          current_stage: jobPayload?.data?.current_stage ?? null,
+        },
+        customer: customer
+          ? {
+              id: customer.id ?? customer?.data?.id ?? null,
+              first_name:
+                customer.first_name ?? customer?.data?.first_name ?? null,
+              last_name:
+                customer.last_name ?? customer?.data?.last_name ?? null,
+              email: customer.email ?? customer?.data?.email ?? null,
+              custom_fields:
+                customer.custom_fields ?? customer?.data?.custom_fields ?? null,
+            }
+          : null,
+        jobPayload,
+        financialPayload,
+        financialError,
+        googleAds: {
+          status: "not_implemented",
+          note: "Offline conversion upload comes next (Data Manager API)",
+        },
+      });
     } catch (err) {
       error("Failed processing event:", {
         message: err.message,
         status: err.status,
         body: err.body,
       });
+      results.push({
+        ...base,
+        skipped: false,
+        ok: false,
+        error: {
+          message: err.message,
+          status: err.status ?? null,
+          body: err.body ?? null,
+        },
+      });
     }
   }
+
+  return res.status(200).json({
+    received: true,
+    tokenPresent: Boolean(config.leapApiToken),
+    tokenLength: config.leapApiToken.length,
+    soldStageName: config.soldStageName,
+    results,
+  });
 });
 
 export default router;

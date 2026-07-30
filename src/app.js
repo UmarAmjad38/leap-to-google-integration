@@ -6,8 +6,12 @@ const app = express()
 app.use(express.json({ limit: "1mb"}))
 
 app.get("/health", (req, res) => {
-    res.status(200).json({ message: "Server is running" })
-})
+  res.status(200).json({
+    message: "Server is running",
+    leapTokenPresent: Boolean(process.env.LEAP_API_TOKEN),
+    webhookSecretPresent: Boolean(process.env.WEBHOOK_SECRET),
+  });
+});
 
 app.use("/webhook/leap", leapWebhookRouter)
 
