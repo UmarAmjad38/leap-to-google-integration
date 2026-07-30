@@ -6,7 +6,17 @@ import {
   extractGclid,
   extractSaleAmount,
 } from "../services/leap.js";
+import { uploadOfflineConversion } from "../services/googleads.js";
 import { log, error } from "../utils/logger.js";
+
+function toConversionTimestamp(value) {
+  if (!value) return new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) {
+    return new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+  }
+  return d.toISOString().replace(/\.\d{3}Z$/, "Z");
+}
 
 const router = Router();
 
@@ -75,6 +85,37 @@ router.post("/", async (req, res) => {
       }
 
       const customer = jobPayload?.data?.customer || null;
+      const awardedDate = jobPayload?.data?.awarded_date ?? null;
+      const conversionDateTime = toConversionTimestamp(awardedDate);
+
+      let googleAds = null;
+      try {
+        googleAds = await uploadOfflineConversion({
+          gclid,
+          saleAmount,
+          conversionDateTime,
+          transactionId: `leap-job-${jobId}`,
+          validateOnly: req.query.validateOnly === "1",
+        });
+        log("Google Ads upload result:", {
+          jobId,
+          gclid,
+          status: googleAds.status,
+        });
+      } catch (googleErr) {
+        error("Google Ads upload failed:", {
+          message: googleErr.message,
+          status: googleErr.status,
+          body: googleErr.body,
+        });
+        googleAds = {
+          status: "error",
+          message: googleErr.message,
+          statusCode: googleErr.status ?? null,
+          body: googleErr.body ?? null,
+          requestBody: googleErr.requestBody ?? null,
+        };
+      }
 
       results.push({
         ...base,
@@ -82,11 +123,12 @@ router.post("/", async (req, res) => {
         ok: true,
         gclid,
         saleAmount,
+        conversionDateTime,
         job: {
           id: jobPayload?.data?.id ?? jobId,
           number: jobPayload?.data?.number ?? null,
           name: jobPayload?.data?.name ?? null,
-          awarded_date: jobPayload?.data?.awarded_date ?? null,
+          awarded_date: awardedDate,
           current_stage: jobPayload?.data?.current_stage ?? null,
         },
         customer: customer
@@ -104,10 +146,7 @@ router.post("/", async (req, res) => {
         jobPayload,
         financialPayload,
         financialError,
-        googleAds: {
-          status: "not_implemented",
-          note: "Offline conversion upload comes next (Data Manager API)",
-        },
+        googleAds,
       });
     } catch (err) {
       error("Failed processing event:", {
