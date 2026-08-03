@@ -122,5 +122,6 @@ export async function uploadOfflineConversion({
     status: validateOnly ? "validated" : "uploaded",
     request: body,
     response: data,
+    requestId: data?.requestId || null,
   };
 }

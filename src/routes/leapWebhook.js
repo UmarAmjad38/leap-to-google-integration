@@ -101,6 +101,7 @@ router.post("/", async (req, res) => {
           jobId,
           gclid,
           status: googleAds.status,
+          requestId: googleAds.requestId, // PROOF OF DELIVERY
         });
       } catch (googleErr) {
         error("Google Ads upload failed:", {
