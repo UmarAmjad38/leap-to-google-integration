@@ -10,22 +10,17 @@ import { readFileSync } from "fs";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 import { OAuth2Client } from "google-auth-library";
+import dotenv from "dotenv";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = join(__dirname, "..");
+dotenv.config({ path: join(root, ".env") });
 
-const secretPath = join(
-  root,
-  "client_secret_803637261121-7r24ij4d8cc4ni8rdngc1ko1dke035f8.apps.googleusercontent.com.json",
-);
-
-const raw = JSON.parse(readFileSync(secretPath, "utf8"));
-const installed = raw.installed || raw.web;
-const clientId = installed.client_id;
-const clientSecret = installed.client_secret;
+const clientId = process.env.GOOGLE_CLIENT_ID;
+const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
 
 if (!clientId || !clientSecret) {
-  console.error("Could not read client_id / client_secret from JSON.");
+  console.error("Could not read GOOGLE_CLIENT_ID or GOOGLE_CLIENT_SECRET from .env.");
   process.exit(1);
 }
 
@@ -75,7 +70,9 @@ const server = createServer(async (req, res) => {
     // Browser may hit this URL twice (prefetch / blank). Ignore empties.
     if (!code) {
       res.writeHead(400, { "Content-Type": "text/plain" });
-      res.end("Missing ?code= in callback. Close this tab and use the auth URL again.");
+      res.end(
+        "Missing ?code= in callback. Close this tab and use the auth URL again.",
+      );
       return;
     }
 
